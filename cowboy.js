@@ -10,19 +10,22 @@
   const rope = layer.querySelector('svg'), paths = [...rope.querySelectorAll('.rope-lead path')], wraps=[...rope.querySelectorAll('.rope-wrap path')], knots=[...rope.querySelectorAll('.rope-knot path')];
   let clips, state = 'loading', start = 0, lastScroll = -Infinity, raf = 0;
   let viewport = {}, actorX = 0, ropePoint = null, currentClip = '', currentFrame = -1;
-  let attached = false, dragging = false, totalWalk = 0, pullStart = 0;
+  let attached = false, dragging = false, totalWalk = 0, pullStart = 0, resizeRaf = 0;
   const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
   function resize() {
-    const mobile = innerWidth <= 760;
-    viewport = {w:document.documentElement.clientWidth,h:document.documentElement.clientHeight,size:mobile?130:200,dock:mobile?34:58,trackX:mobile?17:34,bottom:mobile?12:18,trackTop:mobile?80:98};
+    const bounds = layer.getBoundingClientRect();
+    const mobile = bounds.width <= 760;
+    viewport = {w:bounds.width,h:bounds.height,size:mobile?130:200,dock:mobile?34:58,trackX:mobile?17:34,bottom:mobile?12:18,trackTop:mobile?80:98};
     viewport.actorHeight=viewport.size*348/340;
     viewport.trackBottom=Math.max(viewport.trackTop+40,viewport.h-viewport.actorHeight-28);
     canvas.style.width=viewport.size+'px';canvas.style.height=viewport.actorHeight+'px';
     canvas.style.bottom=viewport.bottom+'px';
     track.style.left=(viewport.trackX-13)+'px';track.style.top=viewport.trackTop+'px';track.style.height=(viewport.trackBottom-viewport.trackTop)+'px';
-    rope.setAttribute('viewBox',`0 0 ${viewport.w} ${viewport.h}`);
     if(state!=='walking'&&state!=='loading') place(viewport.dock);
     updateScroll();
+  }
+  function queueResize(){
+    if(!resizeRaf)resizeRaf=requestAnimationFrame(()=>{resizeRaf=0;resize()});
   }
   function progress(){return clamp(scrollY/Math.max(1,document.documentElement.scrollHeight-innerHeight),0,1)}
   function updateScroll(){const p=progress();thumb.style.top=`${p*100}%`;track.setAttribute('aria-valuenow',String(Math.round(p*100)));track.setAttribute('aria-valuetext',Math.round(p*100)+'% through page');drawRope();}
@@ -54,11 +57,16 @@
   }
   function drawRope(reach=1){
     if(!ropePoint||(!attached&&state!=='tossing')){rope.style.opacity='0';return}
-    const scale=viewport.size/340;
-    const x=actorX-viewport.size/2+ropePoint.x*scale,y=viewport.h-viewport.bottom-viewport.actorHeight+ropePoint.y*scale;
-    const tx=viewport.trackX,ty=viewport.trackTop+progress()*(viewport.trackBottom-viewport.trackTop);
+    // Mobile browser chrome can move the fixed actor without resizing the
+    // layout viewport. Measure both anchors in the SVG's current CSS pixels.
+    // No viewBox: a changing viewport must not scale or letterbox this rope.
+    const actorBounds=canvas.getBoundingClientRect(),ropeBounds=rope.getBoundingClientRect(),thumbBounds=thumb.getBoundingClientRect();
+    const x=actorBounds.left-ropeBounds.left+ropePoint.x*actorBounds.width/canvas.width;
+    const y=actorBounds.top-ropeBounds.top+ropePoint.y*actorBounds.height/canvas.height;
+    const tx=thumbBounds.left-ropeBounds.left+thumbBounds.width/2,ty=thumbBounds.top-ropeBounds.top+thumbBounds.height/2;
     const ey=y+(ty+6-y)*reach,ex=x+(tx-8-x)*reach;
-    const d=`M ${x} ${y+8} Q ${x-2} ${(y+ey)/2} ${ex} ${ey}`;
+    // Overlap the rope already drawn inside the sprite to hide any seam.
+    const d=`M ${x} ${y+14} Q ${x-2} ${(y+ey)/2} ${ex} ${ey}`;
     paths.forEach(p=>p.setAttribute('d',d));
     // The loop encloses the handle, crosses its front, and cinches at the left.
     // Its geometry follows the same thumb position as scrolling and dragging.
@@ -92,7 +100,10 @@
     if(state==='walking'||state==='tossing'||state==='pulling')requestTick();
   }
   addEventListener('scroll',()=>{updateScroll();lastScroll=performance.now();if(state==='idle'&&!reducedMotion.matches){setState('pulling');pullStart=lastScroll;requestTick()}},{passive:true});
-  addEventListener('resize',resize,{passive:true});
+  addEventListener('resize',queueResize,{passive:true});
+  window.visualViewport?.addEventListener('resize',queueResize,{passive:true});
+  window.visualViewport?.addEventListener('scroll',queueResize,{passive:true});
+  if('ResizeObserver' in window)new ResizeObserver(queueResize).observe(layer);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(state==='walking'||state==='tossing'){start=performance.now()}requestTick()}});
   reducedMotion.addEventListener('change',()=>{if(clips)requestTick()});
   function seek(clientY){const r=track.getBoundingClientRect(),p=clamp((clientY-r.top)/r.height,0,1);window.scrollTo({top:p*(document.documentElement.scrollHeight-innerHeight),behavior:'instant'})}
